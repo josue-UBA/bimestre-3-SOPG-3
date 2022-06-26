@@ -1,3 +1,6 @@
+/******************************
+ * librerias
+ ******************************/
 #include <stdio.h>
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -8,189 +11,184 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <netdb.h>
-// LIBRERIAS AGREGADAS
-#include <pthread.h>
 #include <signal.h>
+#include <pthread.h>
 #include "SerialManager.h"
-// MACROS
+/******************************
+ * macros
+ ******************************/
 #define PUERTO_DEL_SERV 10000
 #define BUFFER_SIZE 128
 #define MICRO_SLEEP 3000
 #define CHART_UART '>'
-// VARIABLES GLOBALES
-static int newfd;
-static int s;
-// DECLARACION DE FUNCIONES
-void *hiloParaUart(void *_);
-static void senalHandler(int signal);
+/******************************
+ * variables globales
+ ******************************/
+int newfd;
+int n;
+static pthread_t thing1;
+/******************************
+ * definicion de funciones
+ ******************************/
+void *start_thread(void *message);
 void bloquearSign(void);
 void desbloquearSign(void);
-//DEFINICIONES
-void *hiloParaUart(void *_)
+void sigint_handler(int sig);
+/******************************
+ * implementacion de funciones
+ ******************************/
+void *start_thread(void *message)
 {
-    static const char MSG_LEN = 7, EMPTY_CHAR = 32;
-    static char uartbuff[BUFFER_SIZE] = {EMPTY_CHAR};
-    for (;;)
-    {
-        /* esta funcion NO es bloqueante, por si acaso */
-        if (serial_receive(uartbuff, BUFFER_SIZE))
-        {
-            printf("despues\n");
-            if (*uartbuff != CHART_UART)
-            {
-                perror("Ignorning invalid msg");
-                continue;
-            }
-            if (write(newfd, uartbuff, MSG_LEN) == -1)
-            {
-                perror("Error escribiendo mensaje en socket");
-                exit(1);
-            }
-        }
-        usleep(MICRO_SLEEP);
-    }
+	int i;
+	static const char MSG_LEN = 7, EMPTY_CHAR = 32;
+	static char uartbuff[BUFFER_SIZE] = {EMPTY_CHAR};
+	for (;;)
+	{
+		if (serial_receive(uartbuff, BUFFER_SIZE))
+		{
+			if (*uartbuff != CHART_UART)
+			{
+				perror("Ignorning invalid msg");
+				continue;
+			}
+			if (write(newfd, uartbuff, MSG_LEN) == -1)
+			{
+				perror("Error escribiendo mensaje en socket");
+				exit(1);
+			}
+		}
+		printf("en hilo\n\r");
+		sleep(1);
+	}
+	return NULL;
 }
-static void senalHandler(int signal)
-{
-    close(newfd);
-    close(s);
-    serial_close();
-    exit(0);
-}
+
 void bloquearSign(void)
 {
-    sigset_t set;
-    int s;
-    sigemptyset(&set);
-    sigaddset(&set, SIGINT);
-    int ret = pthread_sigmask(SIG_BLOCK, &set, NULL);
-    /* gestion de errores */
-
-    if (ret < 0)
-    {
-        perror("pthread error");
-        exit(1);
-    }
+	sigset_t set;
+	int s;
+	sigemptyset(&set);
+	sigaddset(&set, SIGINT);
+	// sigaddset(&set, SIGUSR1);
+	pthread_sigmask(SIG_BLOCK, &set, NULL);
 }
+
 void desbloquearSign(void)
 {
-    sigset_t set;
-    int s;
-    sigemptyset(&set);
-    sigaddset(&set, SIGINT);
-    sigaddset(&set, SIGTERM);
-    int ret = pthread_sigmask(SIG_UNBLOCK, &set, NULL);
-    /* gestion de errores */
-
-    if (ret < 0)
-    {
-        perror("pthread error");
-        exit(1);
-    }
+	sigset_t set;
+	int s;
+	sigemptyset(&set);
+	sigaddset(&set, SIGINT);
+	// sigaddset(&set, SIGUSR1);
+	pthread_sigmask(SIG_UNBLOCK, &set, NULL);
 }
-// MAIN
+
+void sigint_handler(int sig)
+{
+	write(0, "Se sale ya que ingreso alguna de las señales SIGINT y SIGTERM\r\n", 80);
+}
+/******************************
+ * funcion main
+ ******************************/
 int main()
 {
-    socklen_t addr_len;
-    struct sockaddr_in clientaddr;
-    struct sockaddr_in serveraddr;
-    pthread_t t1;
-    char buffer[BUFFER_SIZE];
-    int n;
-    struct sigaction sa;
-    sa.sa_handler = senalHandler;
-    sa.sa_flags = 0;
-    sigemptyset(&sa.sa_mask);
-    sigaction(SIGINT, &sa, NULL);
-    sigaction(SIGTERM, &sa, NULL);
-    // Init UART
-    serial_open(1, 115200);
+	// Se establecen las señales a las que respondera el hilo principal: SIGINT y SIGTERM
+	serial_open(1, 115200);
+	struct sigaction sa;
+	sa.sa_handler = sigint_handler;
+	sa.sa_flags = 0;
+	sigemptyset(&sa.sa_mask);
+	if (sigaction(SIGINT, &sa, NULL) == -1 || sigaction(SIGTERM, &sa, NULL) == -1)
+	{
+		perror("sigaction");
+		exit(1);
+	}
 
-    //Creamos socket y verificamos error
-    s = socket(AF_INET, SOCK_STREAM, 0);
-    if(s==-1){
-        perror("socket error");
-        exit(1);
-    }
+	socklen_t addr_len;
+	struct sockaddr_in clientaddr;
+	struct sockaddr_in serveraddr;
+	char buffer[BUFFER_SIZE];
 
-    // Cargamos datos de IP:PORT del server
-    bzero((char*) &serveraddr, sizeof(serveraddr));
-    serveraddr.sin_family = AF_INET;
-    serveraddr.sin_port = htons(PUERTO_DEL_SERV);
-    //serveraddr.sin_addr.s_addr = inet_addr("127.0.0.1");
-    if(inet_pton(AF_INET, "127.0.0.1", &(serveraddr.sin_addr))<=0)
-    {
-        fprintf(stderr,"ERROR invalid server IP\r\n");
-        return 1;
-    }
+	printf("server - socket\n\r");
+	// Creamos socket
+	int s = socket(AF_INET, SOCK_STREAM, 0);
 
-    // Abrimos puerto con bind()
-    if (bind(s, (struct sockaddr*)&serveraddr, sizeof(serveraddr)) == -1) {
-        close(s);
-        perror("listener: bind");
-        return 1;
-    }
+	// Cargamos datos de IP:PORT del server
+	bzero((char *)&serveraddr, sizeof(serveraddr));
+	serveraddr.sin_family = AF_INET;
+	serveraddr.sin_port = htons(PUERTO_DEL_SERV);
+	// serveraddr.sin_addr.s_addr = inet_addr("127.0.0.1");
+	if (inet_pton(AF_INET, "127.0.0.1", &(serveraddr.sin_addr)) <= 0)
+	{
+		fprintf(stderr, "ERROR invalid server IP\r\n");
+		return 1;
+	}
 
+	printf("server - bind\n\r");
+	// Abrimos puerto con bind()
+	if (bind(s, (struct sockaddr *)&serveraddr, sizeof(serveraddr)) == -1)
+	{
+		close(s);
+		perror("listener: bind");
+		return 1;
+	}
+
+	printf("server - listen\n\r");
 	// Seteamos socket en modo Listening
-	if (listen (s, 10) == -1) // backlog=10
-  	{
-    	    perror("error en listen");
-    		exit(1);
-  	}
+	if (listen(s, 10) == -1) // backlog=10
+	{
+		perror("error en listen");
+		exit(1);
+	}
 
-    while(1)
-    {
-        // Ejecutamos accept() para recibir conexiones entrantes
-        addr_len = sizeof(struct sockaddr_in);
-        if ( (newfd = accept(s, (struct sockaddr *)&clientaddr,&addr_len)) == -1)
-        {
-            perror("error en accept");
-            exit(1);
-        }
+	while (1)
+	{
+		// Ejecutamos accept() para recibir conexiones entrantes
+		addr_len = sizeof(struct sockaddr_in);
+		printf("server - accept\n\r");
+		if ((newfd = accept(s, (struct sockaddr *)&clientaddr, &addr_len)) == -1)
+		{
+			perror("error en accept");
+			exit(1);
+		}
 
-        char ipClient[32];
-        inet_ntop(AF_INET, &(clientaddr.sin_addr), ipClient, sizeof(ipClient));
-        printf  ("server:  conexion desde:  %s\n",ipClient);
+		char ipClient[32];
+		inet_ntop(AF_INET, &(clientaddr.sin_addr), ipClient, sizeof(ipClient));
+		printf("server:  conexion desde:  %s\n", ipClient);
+		// se bloquea las señales antes de crear el hilo para que no le afecte las señales SIGINT SIGTERM
+		printf("Bloqueo signal\n");
+		bloquearSign();
+		// se crea el hilo que gestionara la entrada de datos del hardware y el envio de datos al cliente
+		const char *message1 = "Thing 1";
+		pthread_create(&thing1, NULL, start_thread, (void *)message1);
+		// Se desbloquea señal 
+		printf("Desbloqueo signal\n");
+		desbloquearSign();
 
-        /* bloquear antes de crear el thread para que herede el bloqueo */
-        bloquearSign();
-        /* se crea hilo para la comunicacion con la EDUCIA */
-        int ret = pthread_create(&t1, NULL, hiloParaUart, NULL);
-        /* desbloquear para que el thread principal interprete las señales */
-        desbloquearSign();
-        /* gestion de errores */
-        if (ret)
-        {
-            errno = ret;
-            perror("pthread error");
-            exit(1);
-        }
-        /*  
-        - este while itera constantemente. No sale.
-        - la funcion read() es bloqueante 
-        - el valor retornado por la funcion read() es el numero de bytes
-        */
-        printf("antes - servidor\n");
-        while ((n = read(newfd, buffer, BUFFER_SIZE)) > 0)
-        {
-            buffer[n] = '\0';
-            /* serial_send envia el dato recibido de la pagina web a la EDUCIA */
-            serial_send(buffer, n);
-            /* se ejecuta cuando se recibe informacion de la web */
-            printf("Numero de bytes %d. String recibido:%s\n", n, buffer);
-        }
-        /* gestion de errores */
-        if( (n = read(newfd,buffer,BUFFER_SIZE)) == -1 )
-        {
-            perror("Error leyendo mensaje en socket");
-            exit(1);
-        }
-        printf("Se cerro la conexion. Se sale del while.\n");
-    } // fin while
-    // Cerramos conexion con cliente
-    close(newfd);
-    close(s);
-    serial_close();
-
-    return 0;
+		while (1)
+		{
+			printf("read\n\r");
+			// si hay error se sale del programa
+			if ((n = read(newfd, buffer, BUFFER_SIZE)) == -1)
+			{
+				perror("Error leyendo mensaje en socket");
+				exit(1);
+			}
+			// si el cliente se desconecta, entonces se sale del bucle
+			if (n == 0)
+			{
+				break;
+			}
+			// si no ocurre ninguna de las dos opciones anteriores, entonces se envia el dato recibido del cliente al hardware 
+			buffer[n] = 0x00;
+			printf("Recibi %d bytes.:%s\n", n, buffer);
+			serial_send(buffer, n);
+			printf("Numero de bytes %d. String recibido:%s\n", n, buffer);
+		}
+		// Cerramos conexion con cliente
+		close(newfd);
+		// se elimina el hilo creado
+		pthread_cancel(thing1);
+	}
+	return 0;
 }
